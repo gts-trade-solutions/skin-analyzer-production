@@ -81,7 +81,7 @@ function ScoreScale({
         </div>
       </div>
       {/* Threshold scale, aligned to the band breaks */}
-      <div className="text-muted-foreground/70 relative mt-1 h-3 text-[10px] tabular-nums">
+      <div className="text-muted-foreground relative mt-1 h-3.5 text-[11px] font-medium tabular-nums">
         <span className="absolute left-0">0</span>
         <span className="absolute left-1/2 -translate-x-1/2">50</span>
         <span className="absolute left-3/4 -translate-x-1/2">75</span>
@@ -253,7 +253,7 @@ export function ResultsView({
             Higher = healthier
           </span>
         </div>
-        <div className="text-muted-foreground flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px]">
+        <div className="text-muted-foreground flex flex-wrap items-center gap-x-3 gap-y-1 text-xs font-medium">
           <span className="flex items-center gap-1">
             <span className="h-2 w-2 rounded-full bg-red-500/70" />
             0–50 Needs care
@@ -322,7 +322,7 @@ export function ResultsView({
                       />
                     </div>
                     {description && (
-                      <p className="text-muted-foreground mt-1.5 text-xs">
+                      <p className="text-muted-foreground mt-1.5 text-[13px] leading-snug">
                         {description}
                       </p>
                     )}
