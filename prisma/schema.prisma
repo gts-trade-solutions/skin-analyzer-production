@@ -1,0 +1,130 @@
+// Prisma schema for the face + hair analyzer MVP.
+// DB: MySQL. Run `npx prisma migrate dev` once DATABASE_URL points at a live DB.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+enum AnalysisStatus {
+  pending
+  done
+  failed
+}
+
+// Which analyzer produced this record.
+enum AnalysisKind {
+  face
+  hair
+}
+
+// Tracks the future post-back to madenkorea. Null until integration is enabled.
+enum CallbackStatus {
+  pending
+  sent
+  failed
+}
+
+model Analysis {
+  id                String          @id @default(uuid())
+  createdAt         DateTime        @default(now()) @map("created_at")
+  kind              AnalysisKind    @default(face)
+  status            AnalysisStatus  @default(pending)
+  sessionId         String          @map("session_id") // analyzer-local session
+  userId            String?         @map("user_id") // owning account (null = legacy/anonymous)
+  user              User?           @relation(fields: [userId], references: [id], onDelete: SetNull)
+  imageKey          String?         @map("image_key") // S3 key; deleted after analysis (no retention)
+  providerRequestId String?         @map("provider_request_id") // analysis vendor's request/task id
+  rawResult         Json?           @map("raw_result")
+  error             String?         @db.Text
+  callbackStatus    CallbackStatus? @map("callback_status")
+  issues            AnalysisIssue[]
+
+  @@index([userId])
+  @@index([sessionId])
+  @@index([kind])
+  @@map("analyses")
+}
+
+model AnalysisIssue {
+  id         String   @id @default(uuid())
+  analysisId String   @map("analysis_id")
+  analysis   Analysis @relation(fields: [analysisId], references: [id], onDelete: Cascade)
+  issueType  String   @map("issue_type") // e.g. acne | dark_circle | hair_density | hairline | ...
+  score      Float?
+  confidence Float?
+  details    Json?
+
+  @@index([analysisId])
+  @@map("analysis_issues")
+}
+
+// ── Auth & accounts (Auth.js / NextAuth + app fields) ──────────
+
+enum UserRole {
+  user
+  admin
+}
+
+model User {
+  id                String     @id @default(cuid())
+  name              String?
+  email             String     @unique
+  emailVerified     DateTime?  @map("email_verified")
+  image             String?
+  passwordHash      String?    @map("password_hash")
+  mobile            String?    // captured (with consent) on first results view
+  consentAt         DateTime?  @map("consent_at")
+  role              UserRole   @default(user)
+  analysisAllowance Int        @default(1) @map("analysis_allowance")
+  analysisUsed      Int        @default(0) @map("analysis_used")
+  analysisRequested DateTime?  @map("analysis_requested") // set when the user asks for more
+  createdAt         DateTime   @default(now()) @map("created_at")
+  accounts          Account[]
+  sessions          Session[]
+  analyses          Analysis[]
+
+  @@map("users")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String  @map("user_id")
+  type              String
+  provider          String
+  providerAccountId String  @map("provider_account_id")
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique @map("session_token")
+  userId       String   @map("user_id")
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
