@@ -5,7 +5,13 @@ import { authConfig } from "@/lib/auth.config";
 // Edge-safe instance (no Prisma/bcrypt) just for reading the session.
 const { auth } = NextAuth(authConfig);
 
-const PUBLIC = ["/signin", "/signup", "/forgot-password", "/reset-password"];
+const PUBLIC = [
+  "/signin",
+  "/signup",
+  "/verify",
+  "/forgot-password",
+  "/reset-password",
+];
 
 export default auth((req) => {
   const { pathname } = req.nextUrl;

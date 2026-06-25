@@ -2,26 +2,18 @@
 
 import { useState } from "react";
 import { signIn } from "next-auth/react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 
 export default function SignUpPage() {
+  const router = useRouter();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [status, setStatus] = useState<"idle" | "loading" | "sent">("idle");
+  const [status, setStatus] = useState<"idle" | "loading">("idle");
   const [error, setError] = useState<string | null>(null);
-  const [resent, setResent] = useState(false);
-
-  async function resend() {
-    setResent(true);
-    await fetch("/api/auth/resend", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email }),
-    }).catch(() => {});
-  }
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -43,42 +35,13 @@ export default function SignUpPage() {
             : d.error === "invalid_email"
               ? "Enter a valid email address."
               : d.error === "email_failed"
-                ? "Couldn't send the verification email — please try again."
+                ? "Couldn't send the verification code — please try again."
                 : "Couldn't create your account.",
       );
       return;
     }
-    setStatus("sent");
-  }
-
-  if (status === "sent") {
-    return (
-      <main className="reveal flex min-h-dvh flex-col justify-center gap-4 p-6 text-center">
-        <h1 className="font-heading text-3xl font-semibold tracking-tight">
-          Check your inbox
-        </h1>
-        <p className="text-muted-foreground text-sm">
-          We sent a verification link to{" "}
-          <b className="text-foreground">{email}</b>. Click it to activate your
-          account, then sign in.
-        </p>
-        <Button variant="outline" render={<Link href="/signin" />} className="w-full">
-          Go to sign in
-        </Button>
-        <p className="text-muted-foreground text-xs">
-          {resent ? (
-            "Sent again — check your inbox."
-          ) : (
-            <>
-              Didn&apos;t get it?{" "}
-              <button onClick={resend} className="text-foreground underline">
-                Resend
-              </button>
-            </>
-          )}
-        </p>
-      </main>
-    );
+    // Account created (unverified) → enter the emailed code.
+    router.push(`/verify?email=${encodeURIComponent(email)}`);
   }
 
   return (

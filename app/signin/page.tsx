@@ -55,18 +55,12 @@ function SignInInner() {
     router.refresh();
   }
 
-  async function resend() {
+  function goVerify() {
     if (!email) {
-      setError("Enter your email above first, then tap Resend.");
+      setError("Enter your email above first.");
       return;
     }
-    setError(null);
-    await fetch("/api/auth/resend", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email }),
-    }).catch(() => {});
-    setResent(true);
+    router.push(`/verify?email=${encodeURIComponent(email)}`);
   }
 
   return (
@@ -140,9 +134,9 @@ function SignInInner() {
       </form>
 
       <p className="text-muted-foreground text-center text-xs">
-        Didn&apos;t get the verification email?{" "}
-        <button onClick={resend} className="text-foreground underline">
-          Resend
+        Need to verify your email?{" "}
+        <button onClick={goVerify} className="text-foreground underline">
+          Enter your code
         </button>
       </p>
 

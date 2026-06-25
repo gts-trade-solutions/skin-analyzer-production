@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
-import { randomUUID } from "crypto";
 import { prisma } from "@/lib/prisma";
-import { sendVerificationEmail, isMailerConfigured } from "@/lib/mailer";
-import { appUrl, throttle } from "@/lib/http";
+import { sendOtpEmail, isMailerConfigured } from "@/lib/mailer";
+import { throttle } from "@/lib/http";
+import { generateOtp, hashOtp, otpIdentifier, OTP_TTL_MS } from "@/lib/otp";
 
 export const runtime = "nodejs";
 
@@ -38,31 +38,32 @@ export async function POST(req: Request) {
       where: { email },
       data: { passwordHash, name: name ?? existing.name },
     });
-    await prisma.verificationToken.deleteMany({ where: { identifier: email } });
   } else {
     await prisma.user.create({ data: { email, passwordHash, name } });
   }
 
-  const token = randomUUID().replace(/-/g, "") + randomUUID().replace(/-/g, "");
+  // Issue a one-time verification code (replaces the verification link).
+  const code = generateOtp();
+  const identifier = otpIdentifier(email);
+  await prisma.verificationToken.deleteMany({ where: { identifier } });
   await prisma.verificationToken.create({
     data: {
-      identifier: email,
-      token,
-      expires: new Date(Date.now() + 1000 * 60 * 60 * 24),
+      identifier,
+      token: hashOtp(email, code),
+      expires: new Date(Date.now() + OTP_TTL_MS),
     },
   });
 
-  const link = `${appUrl(req)}/api/auth/verify?token=${token}&email=${encodeURIComponent(email)}`;
   if (isMailerConfigured()) {
     try {
-      await sendVerificationEmail(email, link);
+      await sendOtpEmail(email, code);
     } catch (e) {
       console.error("[signup] email failed:", e instanceof Error ? e.message : e);
       return NextResponse.json({ error: "email_failed" }, { status: 502 });
     }
   } else {
-    // Dev fallback: log the link so verification still works without SES.
-    console.log("[signup] verification link:", link);
+    // Dev fallback: log the code so verification works without SES.
+    console.log(`[signup] verification code for ${email}: ${code}`);
   }
 
   return NextResponse.json({ ok: true });
