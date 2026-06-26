@@ -39,20 +39,27 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, reason: "invalid_image" }, { status: 422 });
   }
 
-  // Require a high Face++ face-quality score before allowing analysis.
-  const MIN_FACE_QUALITY = 90;
+  // Confirm a face is present and not below Face++'s OWN quality/blur threshold
+  // (≈70). We deliberately don't impose a stricter bar (e.g. 90) here — the live
+  // camera gate already vets framing/sharpness, so a stricter server check just
+  // rejects good frames the user already lined up. Genuinely bad shots (no face,
+  // very blurry) — including from the "Choose photo" path — still get caught.
   try {
     const d = await detectFace(processed.buffer);
     if (d.faceCount === 0) {
       return NextResponse.json({ ok: false, reason: "no_face" });
     }
-    if (d.faceQuality == null || d.faceQuality < MIN_FACE_QUALITY) {
+    if (d.lowQuality) {
       return NextResponse.json({
         ok: false,
         reason: "low_quality",
         quality: d.faceQuality,
       });
     }
+    // Obstructions that would skew skin analysis.
+    if (d.glasses) return NextResponse.json({ ok: false, reason: "glasses" });
+    if (d.occluded) return NextResponse.json({ ok: false, reason: "occlusion" });
+
     return NextResponse.json({ ok: true, faces: d.faceCount, quality: d.faceQuality });
   } catch (err) {
     console.error("[detect] failed:", err instanceof Error ? err.message : err);

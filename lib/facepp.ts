@@ -53,6 +53,11 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null;
 }
 
+// Probability (0–100) of a key in a Face++ status distribution.
+function statusProb(v: unknown, key: string): number {
+  return isRecord(v) && typeof v[key] === "number" ? (v[key] as number) : 0;
+}
+
 function authForm(jpeg: Buffer): FormData {
   const form = new FormData();
   form.append("api_key", process.env.FACEPP_API_KEY!);
@@ -76,12 +81,22 @@ export type FaceDetection = {
   faceCount: number;
   lowQuality: boolean;
   faceQuality: number | null;
+  glasses: boolean; // any eyewear (normal or sunglasses)
+  occluded: boolean; // hair / hand / object covering the eyes
 };
 
-/** Detect a face and check basic quality. Returns face count + quality. */
+const NONE: FaceDetection = {
+  faceCount: 0,
+  lowQuality: false,
+  faceQuality: null,
+  glasses: false,
+  occluded: false,
+};
+
+/** Detect a face + check quality, eyewear, and eye occlusion (hair/objects). */
 export async function detectFace(jpeg: Buffer): Promise<FaceDetection> {
   const form = authForm(jpeg);
-  form.append("return_attributes", "blur,facequality");
+  form.append("return_attributes", "blur,facequality,glass,eyestatus");
   const res = await fetch(`${apiBase()}${DETECT_PATH}`, {
     method: "POST",
     body: form,
@@ -91,8 +106,7 @@ export async function detectFace(jpeg: Buffer): Promise<FaceDetection> {
   const json: unknown = await res.json();
   const faces =
     isRecord(json) && Array.isArray(json.faces) ? json.faces : [];
-  if (faces.length === 0)
-    return { faceCount: 0, lowQuality: false, faceQuality: null };
+  if (faces.length === 0) return { ...NONE };
 
   const attrs = isRecord(faces[0]) ? faces[0].attributes : undefined;
   const fq =
@@ -114,10 +128,27 @@ export async function detectFace(jpeg: Buffer): Promise<FaceDetection> {
     typeof blurness.threshold === "number" &&
     blurness.value > blurness.threshold;
 
+  // Eyewear: glass.value is "None" | "Normal" | "Dark".
+  const glassVal =
+    isRecord(attrs) && isRecord(attrs.glass) && typeof attrs.glass.value === "string"
+      ? attrs.glass.value
+      : "None";
+  const glasses = glassVal !== "None";
+
+  // Confidence threshold (not argmax) so a noisy distribution doesn't
+  // false-positive. Eye occlusion = hair/hand/object over the eyes.
+  const MIN_OCCLUSION = 75;
+  const eye = isRecord(attrs) && isRecord(attrs.eyestatus) ? attrs.eyestatus : null;
+  const occluded =
+    statusProb(eye?.left_eye_status, "occlusion") >= MIN_OCCLUSION ||
+    statusProb(eye?.right_eye_status, "occlusion") >= MIN_OCCLUSION;
+
   return {
     faceCount: faces.length,
     lowQuality: poorQuality || tooBlurry,
     faceQuality: fq != null && typeof fq.value === "number" ? fq.value : null,
+    glasses,
+    occluded,
   };
 }
 

@@ -3,10 +3,10 @@
 
 import type { Detection, FaceDetector } from "@mediapipe/tasks-vision";
 
-const WASM_URL =
-  "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm";
-const MODEL_URL =
-  "https://storage.googleapis.com/mediapipe-models/face_detector/blaze_face_short_range/float16/1/blaze_face_short_range.tflite";
+// Self-hosted from our own origin (see scripts/copy-mediapipe.mjs + public/models)
+// — no third-party CDN dependency, and cacheable with the app.
+const WASM_URL = "/mediapipe/wasm";
+const MODEL_URL = "/models/blaze_face_short_range.tflite";
 
 let detectorPromise: Promise<FaceDetector> | null = null;
 
@@ -58,6 +58,10 @@ const MAX_TILT = 0.18; // |eye y diff| / interocular distance
 const MAX_NOSE = 0.32; // |nose x − eye midpoint| / interocular distance
 const DARK = 70; // avg luma (0–255) below this is too dark
 const BRIGHT = 215; // above this is over-exposed
+// Sharpness = variance of the Laplacian on a 64px face-box sample. Absolute
+// scale is device-dependent — tune if auto-capture feels too eager / too strict.
+const SHARP_GATE = 16; // below this the face is clearly blurry → block capture
+const SHARP_IDEAL = 180; // at/above this it's crisp (full sub-score)
 
 const clamp01 = (x: number) => Math.max(0, Math.min(1, x));
 
@@ -72,6 +76,7 @@ export function evaluateFace(
   W: number,
   H: number,
   brightness: number | null = null,
+  sharpness: number | null = null,
 ): FaceQuality {
   if (detections.length === 0)
     return { ok: false, message: "Looking for your face…", score: 0 };
@@ -119,14 +124,21 @@ export function evaluateFace(
         : brightness > BRIGHT
           ? clamp01((255 - brightness) / 40)
           : 1;
+  const sharpS =
+    sharpness == null
+      ? 1
+      : clamp01((sharpness - SHARP_GATE) / (SHARP_IDEAL - SHARP_GATE));
+  // Weights favour what Face++ facequality actually penalises: blur + lighting +
+  // framing. Detection confidence is near-constant for any face, so it's minor.
   const score = Math.round(
     100 *
-      (0.25 * sizeS +
-        0.2 * centerS +
-        0.18 * frontalS +
-        0.15 * tiltS +
-        0.12 * confS +
-        0.1 * brightS),
+      (0.22 * sizeS +
+        0.15 * centerS +
+        0.16 * frontalS +
+        0.12 * tiltS +
+        0.2 * sharpS +
+        0.12 * brightS +
+        0.03 * confS),
   );
 
   // Hard checks decide whether we can capture, and which hint to show.
@@ -140,6 +152,8 @@ export function evaluateFace(
   else if (tilt > MAX_TILT) (ok = false), (message = "Keep your head level");
   else if (nose > MAX_NOSE)
     (ok = false), (message = "Look straight at the camera");
+  else if (sharpness != null && sharpness < SHARP_GATE)
+    (ok = false), (message = "Hold steady — stay in focus");
   else if (brightness != null && brightness < DARK)
     (ok = false), (message = "Find brighter light");
   else if (brightness != null && brightness > BRIGHT)

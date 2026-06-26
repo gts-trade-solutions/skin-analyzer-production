@@ -1,16 +1,23 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import type { Detection } from "@mediapipe/tasks-vision";
 import { Button } from "@/components/ui/button";
 import {
   getFaceDetector,
   evaluateFace,
   computeCrop,
+  type Crop,
 } from "@/lib/face-detector";
 
 const COUNTDOWN_MS = 2100; // total "hold still" time -> a 3·2·1 countdown
 const COUNTDOWN_STEP = 700; // ms per countdown number
 const DETECT_INTERVAL_MS = 80; // ~12 fps detection
+const GRACE_FRAMES = 4; // tolerate brief blips before restarting the countdown
+const SAMPLE = 64; // face-box sample size for brightness + sharpness
+// Live score must clear this (not just pass the gates) before auto-capture, so
+// borderline frames don't get snapped and then fail the server's ≥90 check.
+const MIN_AUTOCAPTURE_SCORE = 78;
 
 export function FaceCamera({
   facing,
@@ -33,6 +40,9 @@ export function FaceCamera({
   const centersRef = useRef<{ x: number; y: number }[]>([]);
   const capturedRef = useRef(false);
   const sampleRef = useRef<HTMLCanvasElement | null>(null);
+  const badFramesRef = useRef(0);
+  const bestCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const bestScoreRef = useRef(-1);
 
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -41,6 +51,9 @@ export function FaceCamera({
   const [progress, setProgress] = useState(0);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [score, setScore] = useState(0);
+  // Manual capture is only offered as a fallback when auto-detection can't run
+  // (otherwise it lets people bypass the quality gate, which is misleading).
+  const [manual, setManual] = useState(!autoCapture);
 
   function stop() {
     if (rafRef.current) cancelAnimationFrame(rafRef.current);
@@ -49,32 +62,50 @@ export function FaceCamera({
     streamRef.current = null;
   }
 
+  // Buffer the current frame's portrait crop as "best so far" during the hold.
+  function snapshotBest(video: HTMLVideoElement, crop: Crop) {
+    let c = bestCanvasRef.current;
+    if (!c) {
+      c = document.createElement("canvas");
+      bestCanvasRef.current = c;
+    }
+    c.width = Math.round(crop.w);
+    c.height = Math.round(crop.h);
+    const ctx = c.getContext("2d");
+    if (!ctx) return;
+    ctx.drawImage(video, crop.x, crop.y, crop.w, crop.h, 0, 0, c.width, c.height);
+  }
+
   function capture() {
     if (capturedRef.current) return;
     const video = videoRef.current;
     if (!video || !video.videoWidth) return;
     capturedRef.current = true;
-    // Capture the centered portrait crop that the user sees framed.
-    const crop = computeCrop(video.videoWidth, video.videoHeight);
-    const canvas = document.createElement("canvas");
-    canvas.width = Math.round(crop.w);
-    canvas.height = Math.round(crop.h);
-    const ctx = canvas.getContext("2d");
-    if (!ctx) {
-      capturedRef.current = false;
-      return;
+
+    // Prefer the best-scoring frame buffered during the hold; else snap live.
+    let canvas = bestScoreRef.current >= 0 ? bestCanvasRef.current : null;
+    if (!canvas) {
+      const crop = computeCrop(video.videoWidth, video.videoHeight);
+      canvas = document.createElement("canvas");
+      canvas.width = Math.round(crop.w);
+      canvas.height = Math.round(crop.h);
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        capturedRef.current = false;
+        return;
+      }
+      ctx.drawImage(
+        video,
+        crop.x,
+        crop.y,
+        crop.w,
+        crop.h,
+        0,
+        0,
+        canvas.width,
+        canvas.height,
+      );
     }
-    ctx.drawImage(
-      video,
-      crop.x,
-      crop.y,
-      crop.w,
-      crop.h,
-      0,
-      0,
-      canvas.width,
-      canvas.height,
-    );
     canvas.toBlob(
       (blob) => {
         if (!blob) {
@@ -89,28 +120,52 @@ export function FaceCamera({
     );
   }
 
-  // Average luma (0–255) of the face crop, for a live brightness check.
-  function sampleBrightness(
+  // Brightness (avg luma 0–255) + sharpness (variance of the Laplacian) of the
+  // face box — sampled there, not over the whole frame, so the background can't
+  // skew either reading. Sharpness catches focus/motion blur the steadiness
+  // check misses.
+  function sampleFaceMetrics(
     video: HTMLVideoElement,
-    crop: { x: number; y: number; w: number; h: number },
-  ): number | null {
+    box: { x: number; y: number; w: number; h: number },
+  ): { brightness: number; sharpness: number } | null {
     let c = sampleRef.current;
     if (!c) {
       c = document.createElement("canvas");
-      c.width = 32;
-      c.height = 42;
+      c.width = SAMPLE;
+      c.height = SAMPLE;
       sampleRef.current = c;
     }
     const ctx = c.getContext("2d", { willReadFrequently: true });
     if (!ctx) return null;
     try {
-      ctx.drawImage(video, crop.x, crop.y, crop.w, crop.h, 0, 0, c.width, c.height);
-      const { data } = ctx.getImageData(0, 0, c.width, c.height);
+      ctx.drawImage(video, box.x, box.y, box.w, box.h, 0, 0, SAMPLE, SAMPLE);
+      const { data } = ctx.getImageData(0, 0, SAMPLE, SAMPLE);
+      const g = new Float32Array(SAMPLE * SAMPLE);
       let sum = 0;
-      for (let i = 0; i < data.length; i += 4) {
-        sum += 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+      for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+        const v = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+        g[p] = v;
+        sum += v;
       }
-      return sum / (data.length / 4);
+      // Variance of the Laplacian over interior pixels.
+      let lSum = 0;
+      let lSqSum = 0;
+      let n = 0;
+      for (let y = 1; y < SAMPLE - 1; y++) {
+        for (let x = 1; x < SAMPLE - 1; x++) {
+          const i = y * SAMPLE + x;
+          const lap =
+            4 * g[i] - g[i - 1] - g[i + 1] - g[i - SAMPLE] - g[i + SAMPLE];
+          lSum += lap;
+          lSqSum += lap * lap;
+          n++;
+        }
+      }
+      const mean = lSum / n;
+      return {
+        brightness: sum / g.length,
+        sharpness: lSqSum / n - mean * mean,
+      };
     } catch {
       return null;
     }
@@ -157,6 +212,7 @@ export function FaceCamera({
       }
       if (cancelled) return;
       setReady(true);
+      setManual(!(autoCapture && detector));
       setGuidance(
         autoCapture && detector
           ? "Looking for your face…"
@@ -177,15 +233,39 @@ export function FaceCamera({
         const W = video.videoWidth;
         const H = video.videoHeight;
         const crop = computeCrop(W, H);
-        const res = detector.detectForVideo(video, now);
-        const detections = res.detections ?? [];
-        const brightness = sampleBrightness(video, crop);
-        const q = evaluateFace(detections, crop, W, H, brightness);
+
+        // Guard the detect call so a transient error doesn't kill the loop.
+        let detections: Detection[] = [];
+        try {
+          detections = detector.detectForVideo(video, now).detections ?? [];
+        } catch {
+          return;
+        }
+
+        // Sample brightness + sharpness from the face box (when one face is up).
+        const bb = detections[0]?.boundingBox;
+        let metrics: { brightness: number; sharpness: number } | null = null;
+        if (detections.length === 1 && bb) {
+          const bx = Math.max(0, bb.originX);
+          const by = Math.max(0, bb.originY);
+          const bw = Math.min(W - bx, bb.width);
+          const bh = Math.min(H - by, bb.height);
+          if (bw > 4 && bh > 4)
+            metrics = sampleFaceMetrics(video, { x: bx, y: by, w: bw, h: bh });
+        }
+
+        const q = evaluateFace(
+          detections,
+          crop,
+          W,
+          H,
+          metrics?.brightness ?? null,
+          metrics?.sharpness ?? null,
+        );
         setScore(q.score);
 
         // Require the face to also be steady (not moving) before capturing.
         let stable = true;
-        const bb = detections[0]?.boundingBox;
         if (q.ok && bb) {
           const c = { x: bb.originX + bb.width / 2, y: bb.originY + bb.height / 2 };
           const arr = centersRef.current;
@@ -199,8 +279,20 @@ export function FaceCamera({
           centersRef.current = [];
         }
 
-        if (q.ok && stable) {
-          if (goodSinceRef.current == null) goodSinceRef.current = now;
+        // Auto-capture needs the gates to pass, the face steady, AND a high
+        // enough live score so we don't snap a frame that fails the ≥90 check.
+        const good = q.ok && stable && q.score >= MIN_AUTOCAPTURE_SCORE;
+        if (good) {
+          badFramesRef.current = 0;
+          if (goodSinceRef.current == null) {
+            goodSinceRef.current = now;
+            bestScoreRef.current = -1;
+          }
+          // Keep the single best-scoring frame seen during the hold.
+          if (q.score > bestScoreRef.current) {
+            bestScoreRef.current = q.score;
+            snapshotBest(video, crop);
+          }
           const elapsed = now - goodSinceRef.current;
           setOk(true);
           setProgress(Math.min(1, elapsed / COUNTDOWN_MS));
@@ -213,11 +305,19 @@ export function FaceCamera({
           setGuidance("Hold still…");
           if (elapsed >= COUNTDOWN_MS) capture();
         } else {
-          goodSinceRef.current = null;
-          setOk(false);
-          setProgress(0);
-          setCountdown(null);
-          setGuidance(q.ok ? "Hold still…" : q.message);
+          // Hysteresis: tolerate a few off frames before restarting the count.
+          badFramesRef.current += 1;
+          if (badFramesRef.current > GRACE_FRAMES) {
+            goodSinceRef.current = null;
+            bestScoreRef.current = -1;
+            setOk(false);
+            setProgress(0);
+            setCountdown(null);
+          }
+          // Gates pass but the score is borderline → ask for a cleaner frame.
+          setGuidance(
+            q.ok && stable ? "Hold steady for a clearer shot…" : q.message,
+          );
         }
       };
       rafRef.current = requestAnimationFrame(loop);
@@ -291,8 +391,19 @@ export function FaceCamera({
                 </div>
               </div>
             )}
-            <div className="pointer-events-none absolute inset-x-0 top-3 flex justify-center">
-              <span className="rounded-full bg-black/55 px-3 py-1 text-xs text-white">
+            <div className="pointer-events-none absolute inset-x-0 bottom-4 flex justify-center px-4">
+              <span
+                className={`flex max-w-[90%] items-center gap-2 rounded-full px-5 py-2.5 text-center text-base font-semibold text-white shadow-lg ring-1 backdrop-blur-md transition-colors duration-200 ${
+                  ok
+                    ? "bg-emerald-600/90 ring-emerald-300/40"
+                    : "bg-black/70 ring-white/15"
+                }`}
+              >
+                <span
+                  className={`h-2.5 w-2.5 shrink-0 rounded-full ${
+                    ok ? "bg-emerald-200" : "animate-pulse bg-white/90"
+                  }`}
+                />
                 {guidance}
               </span>
             </div>
@@ -337,13 +448,15 @@ export function FaceCamera({
         >
           Cancel
         </Button>
-        <Button
-          className="flex-1"
-          onClick={capture}
-          disabled={!ready || !!error}
-        >
-          Capture
-        </Button>
+        {manual && (
+          <Button
+            className="flex-1"
+            onClick={capture}
+            disabled={!ready || !!error}
+          >
+            Capture
+          </Button>
+        )}
       </div>
     </div>
   );

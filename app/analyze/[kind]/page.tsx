@@ -1,10 +1,11 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { AppHeader } from "@/components/app-header";
+import { getFaceDetector } from "@/lib/face-detector";
 import {
   ResultsView,
   ResultsSkeleton,
@@ -59,7 +60,6 @@ type Status =
   | "error";
 
 const MAX_AUTO_RETAKES = 3;
-const MIN_QUALITY = 90;
 
 function messageForError(status: number, code: string, subject: string): string {
   switch (code) {
@@ -96,6 +96,10 @@ function detectMessage(reason: string, subject: string): string {
       return `No ${subject} detected. Center your face in good light.`;
     case "low_quality":
       return "Photo quality is too low (blurry or dim).";
+    case "glasses":
+      return "Remove your glasses.";
+    case "occlusion":
+      return `Move hair or objects off your ${subject}.`;
     case "invalid_image":
       return "That image couldn't be read.";
     case "network":
@@ -125,6 +129,11 @@ export default function AnalyzePage() {
   );
   const [detectMsg, setDetectMsg] = useState<string | null>(null);
   const [quality, setQuality] = useState<number | null>(null);
+
+  // Warm up the detector (wasm + model) so the camera starts detecting at once.
+  useEffect(() => {
+    if (kind === "face") void getFaceDetector().catch(() => {});
+  }, [kind]);
 
   function acceptPhoto(f: File, source: CaptureSource) {
     setFile(f);
@@ -205,8 +214,8 @@ export default function AnalyzePage() {
     const why =
       reason === "low_quality"
         ? q != null
-          ? `face quality ${Math.round(q)}/100 (needs ${MIN_QUALITY}+)`
-          : `face quality too low (needs ${MIN_QUALITY}+)`
+          ? `face quality is too low (${Math.round(q)}/100)`
+          : "face quality is too low"
         : detectMessage(reason, config.subject).replace(/\.$/, "").toLowerCase();
 
     setQuality(q);

@@ -17,6 +17,9 @@
 /.next/
 /out/
 
+# self-hosted MediaPipe wasm (copied from node_modules by scripts/copy-mediapipe.mjs)
+/public/mediapipe/wasm/
+
 # production
 /build
 
