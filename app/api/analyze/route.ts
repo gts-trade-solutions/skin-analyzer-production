@@ -13,7 +13,12 @@ import {
 } from "@/lib/analysis";
 import { prisma, isDbConfigured } from "@/lib/prisma";
 import { rateLimit } from "@/lib/rate-limit";
-import { isS3Configured, uploadFromUrl, presignGetUrl } from "@/lib/s3";
+import {
+  isS3Configured,
+  uploadImage,
+  uploadFromUrl,
+  presignGetUrl,
+} from "@/lib/s3";
 import { auth } from "@/lib/auth";
 
 export const runtime = "nodejs";
@@ -51,8 +56,11 @@ export async function POST(req: Request) {
   const form = await req.formData();
   const kindRaw = String(form.get("kind") ?? "face");
   const kind: AnalysisKind = isAnalysisKind(kindRaw) ? kindRaw : "face";
+  // Image came from Perfect Corp's Camera Kit (→ pf_camera_kit on the task).
+  const cameraKit = String(form.get("camera_kit") ?? "") === "true";
 
-  // Authenticated user + per-account quota (face analyses only; admin is exempt).
+  // Authenticated user + per-account quota. Face and hair have separate
+  // allowances (1 each by default); admin is exempt.
   const session = await auth();
   const userId = session?.user?.id ?? null;
   const isAdmin = session?.user?.role === "admin";
@@ -63,11 +71,10 @@ export async function POST(req: Request) {
   if (!account) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
-  if (
-    kind === "face" &&
-    !isAdmin &&
-    account.analysisUsed >= account.analysisAllowance
-  ) {
+  const used = kind === "hair" ? account.hairUsed : account.analysisUsed;
+  const allowance =
+    kind === "hair" ? account.hairAllowance : account.analysisAllowance;
+  if (!isAdmin && used >= allowance) {
     return NextResponse.json({ error: "quota_exceeded" }, { status: 403 });
   }
 
@@ -114,11 +121,13 @@ export async function POST(req: Request) {
   let raw: unknown = null;
   try {
     if (useProvider) {
-      const result = await analyze(kind, processed.buffer);
+      const result = await analyze(kind, processed.buffer, cameraKit);
       issues = result.issues;
       requestId = result.requestId;
       raw = result.raw;
     } else {
+      // Simulate analysis time so the scanning animation is visible in mock mode.
+      await new Promise((r) => setTimeout(r, 3000));
       issues = mockIssues(kind);
     }
   } catch (err) {
@@ -143,6 +152,9 @@ export async function POST(req: Request) {
     } else if (message === "provider_credits") {
       code = "provider_credits";
       status = 402;
+    } else if (message === "hair_angle") {
+      code = "hair_angle";
+      status = 422;
     }
     return NextResponse.json({ error: code }, { status });
   }
@@ -171,6 +183,24 @@ export async function POST(req: Request) {
         }
       }),
     );
+
+    // Hair has no overlay images — store the captured photo itself so History
+    // and Compare can show it. Attach the key to the hair_density issue.
+    if (kind === "hair") {
+      const density = issues.find((i) => i.issueType === "hair_density");
+      if (density) {
+        const key = `${folder}/photo.jpg`;
+        try {
+          await uploadImage(key, processed.buffer, "image/jpeg");
+          density.details = { ...(density.details ?? {}), imageKey: key };
+        } catch (e) {
+          console.error(
+            "[analyze] hair photo store failed:",
+            e instanceof Error ? e.message : e,
+          );
+        }
+      }
+    }
   }
 
   // Persist the result.
@@ -199,12 +229,15 @@ export async function POST(req: Request) {
     });
   }
 
-  // Count a successful face analysis against the user's quota.
-  if (kind === "face" && !isAdmin) {
+  // Count a successful analysis against the user's per-kind quota.
+  if (!isAdmin) {
     await prisma.user
       .update({
         where: { id: userId },
-        data: { analysisUsed: { increment: 1 } },
+        data:
+          kind === "hair"
+            ? { hairUsed: { increment: 1 } }
+            : { analysisUsed: { increment: 1 } },
       })
       .catch(() => {});
   }

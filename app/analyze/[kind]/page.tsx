@@ -2,7 +2,6 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
-import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { AppHeader } from "@/components/app-header";
 import { getFaceDetector } from "@/lib/face-detector";
@@ -12,6 +11,8 @@ import {
   type ResultIssue,
 } from "@/components/results-view";
 import { FaceCamera } from "@/components/face-camera";
+import { CameraKit } from "@/components/camera-kit";
+import { HairDensityResult } from "@/components/hair-density-result";
 
 const KIND_CONFIG = {
   face: {
@@ -27,14 +28,15 @@ const KIND_CONFIG = {
     ],
   },
   hair: {
-    title: "Analyze Hair",
-    guide: "Take a close-up of your scalp and hairline in good light.",
-    facing: "environment" as const,
-    subject: "hair and scalp",
+    title: "Hair Density",
+    guide: "Tilt your head down ~45° so your hairline faces the camera.",
+    facing: "user" as const,
+    subject: "hair",
     tips: [
-      "Use bright, even light on the area",
-      "Hold the camera steady and close",
-      "Keep the scalp / hairline in sharp focus",
+      "Hair down and untied — show your whole hairline",
+      "Tilt your head down about 45° toward the camera",
+      "Bright, even light — no harsh shadows",
+      "Keep the top of your head and hairline in frame",
     ],
   },
 };
@@ -60,6 +62,11 @@ type Status =
   | "error";
 
 const MAX_AUTO_RETAKES = 3;
+// Opt-in: use Perfect Corp's guided JS Camera Kit instead of our custom camera.
+const USE_CAMERA_KIT = process.env.NEXT_PUBLIC_USE_CAMERA_KIT === "true";
+// The Kit's faceDetectionMode for hair density (from the density Camera Kit
+// docs). Set it to enable the Kit for hair; unset → custom camera fallback.
+const HAIR_KIT_MODE = process.env.NEXT_PUBLIC_HAIR_KIT_MODE;
 
 function messageForError(status: number, code: string, subject: string): string {
   switch (code) {
@@ -79,6 +86,8 @@ function messageForError(status: number, code: string, subject: string): string 
       return "Unsupported format. Use a JPG, PNG, or WebP photo.";
     case "provider_credits":
       return "Analysis credits exhausted. Top up your provider account to continue.";
+    case "hair_angle":
+      return "Tilt your head down more so your hairline faces the camera, then retake.";
     case "quota_exceeded":
       return "You've used your analysis. Request more from the admin on the home screen.";
     case "not_configured":
@@ -131,8 +140,9 @@ export default function AnalyzePage() {
   const [quality, setQuality] = useState<number | null>(null);
 
   // Warm up the detector (wasm + model) so the camera starts detecting at once.
+  // Skipped when the Perfect Corp Camera Kit handles capture.
   useEffect(() => {
-    if (kind === "face") void getFaceDetector().catch(() => {});
+    if (kind === "face" && !USE_CAMERA_KIT) void getFaceDetector().catch(() => {});
   }, [kind]);
 
   function acceptPhoto(f: File, source: CaptureSource) {
@@ -143,6 +153,18 @@ export default function AnalyzePage() {
     });
     setStatus("checking");
     void runDetect(f, source);
+  }
+
+  // Camera Kit already validated the capture and provides its own review/retake
+  // ("go back"), so we take the final image straight to analysis — no re-open
+  // churn, no dead-ends.
+  function acceptKitPhoto(f: File) {
+    setFile(f);
+    setPreviewUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return URL.createObjectURL(f);
+    });
+    void analyze(f, true); // image from the Camera Kit → pf_camera_kit
   }
 
   function onPick(e: React.ChangeEvent<HTMLInputElement>) {
@@ -237,14 +259,16 @@ export default function AnalyzePage() {
     }
   }
 
-  async function analyze() {
-    if (!file) return;
+  async function analyze(overrideFile?: File, cameraKit = false) {
+    const img = overrideFile instanceof File ? overrideFile : file;
+    if (!img) return;
     setStatus("loading");
     setErrorMsg(null);
     try {
       const body = new FormData();
-      body.append("image", file);
+      body.append("image", img);
       body.append("kind", kind);
+      body.append("camera_kit", cameraKit ? "true" : "false");
       const res = await fetch("/api/analyze", { method: "POST", body });
       if (!res.ok) {
         let code = "";
@@ -266,33 +290,6 @@ export default function AnalyzePage() {
     }
   }
 
-  // Hair analysis isn't ready yet — show a "coming soon" screen.
-  if (kind === "hair") {
-    return (
-      <main className="flex min-h-dvh flex-col gap-6 p-6">
-        <AppHeader title="Analyze Hair" />
-        <div className="flex flex-1 flex-col items-center justify-center gap-4 text-center">
-          <span className="bg-gold/15 text-gold rounded-full px-3 py-1 text-xs font-semibold tracking-wide uppercase">
-            Coming soon
-          </span>
-          <h2 className="font-heading text-2xl font-semibold tracking-tight">
-            Hair analysis is on the way
-          </h2>
-          <p className="text-muted-foreground max-w-xs text-sm">
-            We&apos;re putting the finishing touches on the hair analyzer. In the
-            meantime, try the face analyzer.
-          </p>
-          <Button render={<Link href="/analyze/face" />} size="lg" className="mt-2">
-            Analyze Face
-          </Button>
-          <Link href="/" className="text-muted-foreground text-sm underline">
-            Back home
-          </Link>
-        </div>
-      </main>
-    );
-  }
-
   return (
     <main className="flex min-h-dvh flex-col gap-6 p-6">
       <AppHeader title={config.title} />
@@ -307,7 +304,11 @@ export default function AnalyzePage() {
 
       {status === "done" ? (
         <>
-          <ResultsView issues={issues} fallbackImage={previewUrl} />
+          {kind === "hair" ? (
+            <HairDensityResult issues={issues} fallbackImage={previewUrl} />
+          ) : (
+            <ResultsView issues={issues} fallbackImage={previewUrl} />
+          )}
           <Button variant="outline" className="w-full" onClick={reset}>
             Start over
           </Button>
@@ -316,13 +317,27 @@ export default function AnalyzePage() {
           </p>
         </>
       ) : status === "camera" ? (
-        <FaceCamera
-          facing={config.facing}
-          autoCapture={kind === "face"}
-          tips={config.tips}
-          onCapture={(f) => acceptPhoto(f, "camera")}
-          onCancel={() => setStatus("idle")}
-        />
+        USE_CAMERA_KIT && kind === "face" ? (
+          <CameraKit
+            mode="skincare"
+            onCapture={acceptKitPhoto}
+            onCancel={() => setStatus("idle")}
+          />
+        ) : USE_CAMERA_KIT && kind === "hair" && HAIR_KIT_MODE ? (
+          <CameraKit
+            mode={HAIR_KIT_MODE}
+            onCapture={acceptKitPhoto}
+            onCancel={() => setStatus("idle")}
+          />
+        ) : (
+          <FaceCamera
+            facing={config.facing}
+            autoCapture={kind === "face"}
+            tips={config.tips}
+            onCapture={(f) => acceptPhoto(f, "camera")}
+            onCancel={() => setStatus("idle")}
+          />
+        )
       ) : (
         <>
           {/* Same 3:4 portrait frame as the camera, so the capture isn't recropped. */}
@@ -350,6 +365,20 @@ export default function AnalyzePage() {
                     Checking your photo…
                   </p>
                 )}
+              </div>
+            )}
+
+            {status === "loading" && (
+              <div className="pointer-events-none absolute inset-0 overflow-hidden">
+                {/* Scanning sweep over the captured photo. */}
+                <div className="scan-line absolute inset-x-0 top-0 h-1/3">
+                  <div className="via-gold/35 to-gold/55 h-full w-full bg-gradient-to-b from-transparent" />
+                  <div className="bg-gold h-[2px] w-full shadow-[0_0_14px_2px_oklch(0.72_0.12_80/0.6)]" />
+                </div>
+                <div className="absolute inset-x-0 bottom-0 flex items-center justify-center gap-2 bg-gradient-to-t from-black/65 to-transparent px-3 pt-8 pb-3 text-sm font-medium text-white">
+                  <span className="inline-block h-4 w-4 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                  Analyzing your {config.subject}…
+                </div>
               </div>
             )}
           </div>
@@ -385,7 +414,7 @@ export default function AnalyzePage() {
                 </Button>
                 <Button
                   className="flex-1"
-                  onClick={analyze}
+                  onClick={() => analyze()}
                   disabled={detect !== "ok"}
                 >
                   Analyze
@@ -402,15 +431,7 @@ export default function AnalyzePage() {
             </div>
           )}
 
-          {status === "loading" && (
-            <div className="space-y-4">
-              <p className="text-muted-foreground flex items-center justify-center gap-2 text-sm">
-                <span className="border-foreground/25 border-t-foreground inline-block h-4 w-4 animate-spin rounded-full border-2" />
-                Analyzing your {config.subject}…
-              </p>
-              <ResultsSkeleton />
-            </div>
-          )}
+          {status === "loading" && <ResultsSkeleton />}
 
           {status === "error" && (
             <div className="space-y-3">

@@ -1,0 +1,3 @@
+-- AlterTable
+ALTER TABLE `users` ADD COLUMN `hair_allowance` INTEGER NOT NULL DEFAULT 1,
+    ADD COLUMN `hair_used` INTEGER NOT NULL DEFAULT 0;

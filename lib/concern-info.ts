@@ -29,6 +29,10 @@ export const CONCERN_INFO: Record<
     description: "Lower eyelid firmness",
   },
   age_spot: { name: "Age spots", description: "Sun spots and pigmentation" },
+  hair_density: {
+    name: "Hair density",
+    description: "How full your hair is vs. visible scalp",
+  },
 };
 
 export function concernName(key: string): string {

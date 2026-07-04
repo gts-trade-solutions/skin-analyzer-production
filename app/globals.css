@@ -160,7 +160,29 @@
     background-position: -200% 0;
   }
 }
+/* The band is one-third of the image tall; translateY is relative to the
+   element, so it must travel from -100% (just above) to 400% (just below) to
+   sweep the whole image. */
+@keyframes scan-sweep {
+  0% {
+    transform: translateY(-100%);
+    opacity: 0;
+  }
+  10% {
+    opacity: 1;
+  }
+  90% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(400%);
+    opacity: 0;
+  }
+}
 
+@utility scan-line {
+  animation: scan-sweep 2s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
 @utility reveal {
   animation: reveal-up 0.6s cubic-bezier(0.22, 1, 0.36, 1) both;
 }

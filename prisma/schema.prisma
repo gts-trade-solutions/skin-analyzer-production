@@ -80,8 +80,10 @@ model User {
   mobile            String?    // captured (with consent) on first results view
   consentAt         DateTime?  @map("consent_at")
   role              UserRole   @default(user)
-  analysisAllowance Int        @default(1) @map("analysis_allowance")
-  analysisUsed      Int        @default(0) @map("analysis_used")
+  analysisAllowance Int        @default(1) @map("analysis_allowance") // face
+  analysisUsed      Int        @default(0) @map("analysis_used") // face
+  hairAllowance     Int        @default(1) @map("hair_allowance")
+  hairUsed          Int        @default(0) @map("hair_used")
   analysisRequested DateTime?  @map("analysis_requested") // set when the user asks for more
   createdAt         DateTime   @default(now()) @map("created_at")
   accounts          Account[]

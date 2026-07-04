@@ -9,6 +9,7 @@ import {
   ResultsSkeleton,
   type ResultIssue,
 } from "@/components/results-view";
+import { HairDensityResult } from "@/components/hair-density-result";
 
 type Detail = {
   id: string;
@@ -57,7 +58,17 @@ export default function HistoryDetailPage() {
           <p className="text-muted-foreground text-xs">
             {new Date(data.createdAt).toLocaleString()}
           </p>
-          <ResultsView issues={data.issues} />
+          {data.kind === "hair" ? (
+            <HairDensityResult
+              issues={data.issues}
+              fallbackImage={
+                data.issues.find((i) => i.issueType === "hair_density")?.image ??
+                null
+              }
+            />
+          ) : (
+            <ResultsView issues={data.issues} />
+          )}
         </>
       )}
     </main>

@@ -18,6 +18,8 @@ export async function GET() {
       mobile: true,
       analysisAllowance: true,
       analysisUsed: true,
+      hairAllowance: true,
+      hairUsed: true,
       analysisRequested: true,
     },
   });
@@ -25,6 +27,8 @@ export async function GET() {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
   const isAdmin = session.user.role === "admin";
+  const faceRemaining = Math.max(0, u.analysisAllowance - u.analysisUsed);
+  const hairRemaining = Math.max(0, u.hairAllowance - u.hairUsed);
   return NextResponse.json({
     email: u.email,
     name: u.name,
@@ -33,9 +37,9 @@ export async function GET() {
     hasMobile: !!u.mobile,
     allowance: u.analysisAllowance,
     used: u.analysisUsed,
-    remaining: isAdmin
-      ? null
-      : Math.max(0, u.analysisAllowance - u.analysisUsed),
+    // Face remaining kept as `remaining` for backward compatibility.
+    remaining: isAdmin ? null : faceRemaining,
+    hairRemaining: isAdmin ? null : hairRemaining,
     requested: u.analysisRequested != null,
   });
 }

@@ -99,9 +99,11 @@ function ScoreScale({
 export function ResultsView({
   issues,
   fallbackImage = null,
+  heading = "Skin breakdown",
 }: {
   issues: ResultIssue[];
   fallbackImage?: string | null;
+  heading?: string;
 }) {
   const baseImage =
     issues.find((i) => i.issueType === "resize_image")?.image ?? fallbackImage;
@@ -248,7 +250,7 @@ export function ResultsView({
 
       <div className="space-y-2">
         <div className="flex items-center justify-between">
-          <h2 className="text-lg font-semibold">Skin breakdown</h2>
+          <h2 className="text-lg font-semibold">{heading}</h2>
           <span className="text-muted-foreground text-xs">
             Higher = healthier
           </span>

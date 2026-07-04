@@ -14,6 +14,8 @@ type AdminUser = {
   consentAt: string | null;
   allowance: number;
   used: number;
+  hairAllowance: number;
+  hairUsed: number;
   requested: string | null;
   createdAt: string;
   analyses: number;
@@ -45,12 +47,12 @@ export default function AdminPage() {
     load();
   }, []);
 
-  async function grant(id: string, amount: number) {
+  async function grant(id: string, amount: number, kind: "face" | "hair") {
     setBusy(id);
     await fetch("/api/admin/grant", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId: id, amount }),
+      body: JSON.stringify({ userId: id, amount, kind }),
     }).catch(() => {});
     await load();
     setBusy(null);
@@ -76,7 +78,7 @@ export default function AdminPage() {
                 key={u.id}
                 className={`card-premium p-3 ${u.requested ? "ring-gold/50 ring-2" : ""}`}
               >
-                <div className="flex items-center justify-between gap-3">
+                <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <div className="flex items-center gap-1.5">
                       <span className="truncate text-sm font-medium">
@@ -89,30 +91,38 @@ export default function AdminPage() {
                       )}
                     </div>
                     <div className="text-muted-foreground text-xs">
-                      {u.used}/{u.allowance} used
+                      Face {u.used}/{u.allowance} · Hair {u.hairUsed}/
+                      {u.hairAllowance}
                       {!u.verified && " · unverified"}
                       {u.requested && (
                         <span className="text-gold"> · requested more</span>
                       )}
                     </div>
                   </div>
-                  <div className="flex shrink-0 gap-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={busy === u.id}
-                      onClick={() => grant(u.id, 1)}
-                    >
-                      +1
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={busy === u.id}
-                      onClick={() => grant(u.id, 5)}
-                    >
-                      +5
-                    </Button>
+                  <div className="flex shrink-0 flex-col gap-1.5 text-right">
+                    {(["face", "hair"] as const).map((k) => (
+                      <div key={k} className="flex items-center gap-2">
+                        <span className="text-muted-foreground w-9 text-[11px] font-medium capitalize">
+                          {k}
+                        </span>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={busy === u.id}
+                          onClick={() => grant(u.id, 1, k)}
+                        >
+                          +1
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={busy === u.id}
+                          onClick={() => grant(u.id, 5, k)}
+                        >
+                          +5
+                        </Button>
+                      </div>
+                    ))}
                   </div>
                 </div>
 
@@ -138,8 +148,12 @@ export default function AdminPage() {
                     <Detail label="Consent given" value={fmtDate(u.consentAt)} />
                     <Detail label="Analyses" value={u.analyses} />
                     <Detail
-                      label="Allowance"
+                      label="Face allowance"
                       value={`${u.used} / ${u.allowance}`}
+                    />
+                    <Detail
+                      label="Hair allowance"
+                      value={`${u.hairUsed} / ${u.hairAllowance}`}
                     />
                     <Detail
                       label="Requested more"

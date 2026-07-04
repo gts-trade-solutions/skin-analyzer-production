@@ -14,7 +14,8 @@ type ListItem = {
   id: string;
   kind: string;
   createdAt: string;
-  overall: number | null;
+  overall: number | null; // face
+  summary: string | null; // hair density grade
 };
 type Issue = {
   issueType: string;
@@ -80,7 +81,11 @@ function Selector({
           .map((i) => (
             <option key={i.id} value={i.id}>
               {fmtDate(i.createdAt)} · {i.kind}
-              {i.overall != null ? ` · ${Math.round(i.overall * 100)}/100` : ""}
+              {i.overall != null
+                ? ` · ${Math.round(i.overall * 100)}/100`
+                : i.summary
+                  ? ` · ${i.summary}`
+                  : ""}
             </option>
           ))}
       </select>
@@ -259,6 +264,91 @@ function Comparison({ a, b }: { a: Detail; b: Detail }) {
   );
 }
 
+// Hair: density is a single graded score (mapping 1–4). Compare two captures
+// side by side with the change in density over time.
+function HairComparison({ a, b }: { a: Detail; b: Detail }) {
+  const read = (d: Detail) => {
+    const density = find(d, "hair_density");
+    const score = density?.score ?? null; // 0–1 (= mapping / 4)
+    return {
+      img: density?.image ?? null,
+      term: density?.details?.type ?? null,
+      mapping: score != null ? score * 4 : null,
+    };
+  };
+  const A = read(a);
+  const B = read(b);
+  const delta =
+    A.mapping != null && B.mapping != null ? B.mapping - A.mapping : null;
+
+  const sides = [
+    { tag: "A" as const, r: A, d: a },
+    { tag: "B" as const, r: B, d: b },
+  ];
+
+  return (
+    <div className="space-y-6">
+      <div className="grid grid-cols-2 gap-4">
+        {sides.map(({ tag, r, d }) => {
+          const s = SIDE[tag];
+          return (
+            <div key={tag} className="space-y-2">
+              <div
+                className={`bg-muted relative mx-auto flex aspect-[3/4] w-full max-w-[16rem] items-center justify-center overflow-hidden rounded-2xl shadow-[0_10px_28px_-14px_oklch(0.4_0.02_60/0.28)] ring-2 ${s.ring}`}
+              >
+                {r.img ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={r.img}
+                    alt={`${tag} — hair`}
+                    className="h-full w-full object-cover"
+                  />
+                ) : (
+                  <span className="text-muted-foreground text-sm">No image</span>
+                )}
+                <span
+                  className={`absolute left-2 top-2 grid h-6 w-6 place-items-center rounded-full text-xs font-bold text-white shadow ${s.badge}`}
+                >
+                  {tag}
+                </span>
+              </div>
+              <div className="text-center">
+                <div className="text-lg font-semibold">{r.term ?? "—"}</div>
+                <div className="text-muted-foreground text-sm tabular-nums">
+                  {r.mapping != null ? `${r.mapping.toFixed(1)} / 4` : "—"}
+                </div>
+                <div className="text-muted-foreground text-xs">
+                  {fmtDate(d.createdAt)}
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="card-premium reveal p-4 text-center">
+        <div className="text-muted-foreground text-xs font-medium tracking-wide uppercase">
+          Change in density (A → B)
+        </div>
+        <div className="mt-1 text-2xl font-bold tabular-nums">
+          {delta == null ? (
+            <span className="text-muted-foreground">—</span>
+          ) : Math.abs(delta) < 0.05 ? (
+            <span className="text-muted-foreground">No change</span>
+          ) : delta > 0 ? (
+            <span className="text-emerald-600">▲ +{delta.toFixed(1)}</span>
+          ) : (
+            <span className="text-red-600">▼ {delta.toFixed(1)}</span>
+          )}
+        </div>
+      </div>
+      <p className="text-muted-foreground text-xs">
+        Higher density = fuller hair. ▲ green = improvement from A to B.
+      </p>
+    </div>
+  );
+}
+
 export default function ComparePage() {
   const [items, setItems] = useState<ListItem[]>([]);
   const [aId, setAId] = useState("");
@@ -313,7 +403,16 @@ export default function ComparePage() {
         </div>
 
         {a && b ? (
-          <Comparison a={a} b={b} />
+          a.kind !== b.kind ? (
+            <p className="text-muted-foreground text-sm">
+              Pick two analyses of the same type (both face, or both hair) to
+              compare them.
+            </p>
+          ) : a.kind === "hair" ? (
+            <HairComparison a={a} b={b} />
+          ) : (
+            <Comparison a={a} b={b} />
+          )
         ) : (
           <p className="text-muted-foreground text-sm">
             {items.length < 2

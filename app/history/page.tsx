@@ -8,7 +8,8 @@ type Item = {
   id: string;
   kind: string;
   createdAt: string;
-  overall: number | null;
+  overall: number | null; // face: 0–1 overall score
+  summary: string | null; // hair: density grade (e.g. "Medium Density")
   thumbnailUrl: string | null;
   ownerEmail?: string | null;
 };
@@ -90,14 +91,18 @@ export default function HistoryPage() {
                   {new Date(it.createdAt).toLocaleString()}
                 </div>
               </div>
-              {it.overall != null && (
+              {it.overall != null ? (
                 <div className="text-right">
                   <div className="text-2xl font-semibold tabular-nums">
                     {Math.round(it.overall * 100)}
                   </div>
                   <div className="text-muted-foreground text-xs">/100</div>
                 </div>
-              )}
+              ) : it.summary ? (
+                <div className="max-w-[7rem] text-right text-sm font-semibold">
+                  {it.summary}
+                </div>
+              ) : null}
             </Link>
           </li>
         ))}

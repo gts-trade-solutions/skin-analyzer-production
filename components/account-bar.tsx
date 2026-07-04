@@ -7,7 +7,8 @@ import { signOut } from "next-auth/react";
 type Me = {
   email: string;
   isAdmin: boolean;
-  remaining: number | null;
+  remaining: number | null; // face
+  hairRemaining: number | null;
   requested: boolean;
 };
 
@@ -34,6 +35,10 @@ export function AccountBar() {
     await fetch("/api/request-access", { method: "POST" }).catch(() => {});
   }
 
+  // Prompt to request more once either allowance is exhausted.
+  const anyExhausted =
+    !me.isAdmin && (me.remaining === 0 || me.hairRemaining === 0);
+
   return (
     <div className="card-premium reveal flex items-center justify-between gap-3 p-3 text-sm">
       <div className="min-w-0">
@@ -41,9 +46,7 @@ export function AccountBar() {
         <div className="text-muted-foreground text-xs">
           {me.isAdmin
             ? "Administrator"
-            : me.remaining === 0
-              ? "No analyses left"
-              : `${me.remaining} analysis${me.remaining === 1 ? "" : "es"} left`}
+            : `${me.remaining} face · ${me.hairRemaining} hair left`}
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-4 text-xs">
@@ -52,8 +55,7 @@ export function AccountBar() {
             Admin
           </Link>
         )}
-        {!me.isAdmin &&
-          me.remaining === 0 &&
+        {anyExhausted &&
           (requested ? (
             <span className="text-muted-foreground">Requested</span>
           ) : (

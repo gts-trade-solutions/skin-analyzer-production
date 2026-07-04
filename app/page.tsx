@@ -43,19 +43,14 @@ export default function HomePage() {
           >
             Analyze Face
           </Button>
-          <div className="relative w-full">
-            <Button
-              size="lg"
-              variant="outline"
-              className="w-full opacity-60"
-              disabled
-            >
-              Analyze Hair
-            </Button>
-            <span className="bg-gold/15 text-gold pointer-events-none absolute top-1/2 right-3 -translate-y-1/2 rounded-full px-2 py-0.5 text-[10px] font-semibold tracking-wide uppercase">
-              Coming soon
-            </span>
-          </div>
+          <Button
+            render={<Link href="/analyze/hair" />}
+            size="lg"
+            variant="outline"
+            className="lift w-full"
+          >
+            Analyze Hair
+          </Button>
         </div>
 
         <div

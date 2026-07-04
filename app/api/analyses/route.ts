@@ -41,7 +41,9 @@ export async function GET() {
         createdAt: true,
         user: { select: { email: true } },
         issues: {
-          where: { issueType: { in: ["overall", "resize_image"] } },
+          where: {
+            issueType: { in: ["overall", "resize_image", "hair_density"] },
+          },
           select: { issueType: true, score: true, details: true },
         },
       },
@@ -50,11 +52,20 @@ export async function GET() {
     const s3 = isS3Configured();
     const items = await Promise.all(
       rows.map(async (r) => {
-        const overall =
-          r.issues.find((i) => i.issueType === "overall")?.score ?? null;
-        const thumbKey = detailsOf(
-          r.issues.find((i) => i.issueType === "resize_image")?.details,
-        ).imageKey;
+        const density = r.issues.find((i) => i.issueType === "hair_density");
+        const isHair = r.kind === "hair";
+        // Face rows summarise as an overall /100 score; hair rows as the
+        // density grade (e.g. "Medium Density").
+        const overall = isHair
+          ? null
+          : (r.issues.find((i) => i.issueType === "overall")?.score ?? null);
+        const summary = isHair ? (detailsOf(density?.details).type ?? null) : null;
+        // Thumbnail: face uses the resized base photo; hair uses its own photo.
+        const thumbKey = isHair
+          ? detailsOf(density?.details).imageKey
+          : detailsOf(
+              r.issues.find((i) => i.issueType === "resize_image")?.details,
+            ).imageKey;
         const thumbnailUrl =
           s3 && thumbKey ? await presignGetUrl(thumbKey, 3600) : null;
         return {
@@ -62,6 +73,7 @@ export async function GET() {
           kind: r.kind,
           createdAt: r.createdAt.toISOString(),
           overall,
+          summary,
           thumbnailUrl,
           ownerEmail: isAdmin ? (r.user?.email ?? null) : null,
         };

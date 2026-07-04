@@ -22,6 +22,12 @@ import type { AnalysisKind, AnalysisResult, Issue } from "@/lib/analysis";
 const SKIN_FILE_PATH = "/s2s/v2.1/file/skin-analysis";
 const SKIN_TASK_PATH = "/s2s/v2.1/task/skin-analysis";
 
+// Hair density (v2.0) — same S2S shape as skin. Confirmed live: task body is
+// { src_file_id }, poll data.task_status/error/results. Photo: a front selfie
+// with the head lowered ~45°, hairline visible. Output: density grade 1–4.
+const HAIR_DENSITY_FILE_PATH = "/s2s/v2.0/file/hair-density-detection";
+const HAIR_DENSITY_TASK_PATH = "/s2s/v2.0/task/hair-density-detection";
+
 const SKIN_DST_ACTIONS = [
   "tear_trough",
   "skin_type",
@@ -120,7 +126,7 @@ async function uploadFile(filePath: string, jpeg: Buffer): Promise<string> {
   return file.file_id;
 }
 
-async function startSkinTask(fileId: string): Promise<string> {
+async function startSkinTask(fileId: string, cameraKit = false): Promise<string> {
   const res = await fetch(`${apiBase()}${SKIN_TASK_PATH}`, {
     method: "POST",
     headers: { "Content-Type": "application/json", Authorization: authHeader() },
@@ -129,7 +135,7 @@ async function startSkinTask(fileId: string): Promise<string> {
       dst_actions: SKIN_DST_ACTIONS,
       miniserver_args: { enable_mask_overlay: true },
       format: "json",
-      pf_camera_kit: false,
+      pf_camera_kit: cameraKit,
     }),
   });
   if (!res.ok) {
@@ -284,18 +290,114 @@ function sanitizeRaw(raw: unknown): unknown {
   }
 }
 
+// Generic task start/poll (shared by hair; skin keeps its own for now).
+async function startTask(
+  taskPath: string,
+  body: Record<string, unknown>,
+): Promise<string> {
+  const res = await fetch(`${apiBase()}${taskPath}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: authHeader() },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    if (/CreditInsufficiency/i.test(t)) throw new Error("provider_credits");
+    throw new Error(`perfectcorp_task_start_${res.status}: ${t.slice(0, 200)}`);
+  }
+  const json: unknown = await res.json();
+  const taskId =
+    isRecord(json) && isRecord(json.data) && typeof json.data.task_id === "string"
+      ? json.data.task_id
+      : null;
+  if (!taskId) throw new Error("perfectcorp_no_task_id");
+  return taskId;
+}
+
+async function pollTask(taskPath: string, taskId: string): Promise<unknown> {
+  for (let attempt = 0; attempt < 60; attempt++) {
+    const res = await fetch(
+      `${apiBase()}${taskPath}/${encodeURIComponent(taskId)}`,
+      { headers: { Authorization: authHeader() } },
+    );
+    if (!res.ok) throw new Error(`perfectcorp_poll_${res.status}`);
+    const json: unknown = await res.json();
+    const data = isRecord(json) && isRecord(json.data) ? json.data : undefined;
+    const status = data?.task_status;
+    if (status === "success") return json;
+    if (status === "error") {
+      const detail =
+        data && typeof data.error === "string" ? data.error : "unknown";
+      const msg =
+        data && typeof data.error_message === "string" ? data.error_message : "";
+      console.error(
+        `[perfectcorp] task error: ${detail}${msg ? ` — ${msg}` : ""}`,
+      );
+      const both = `${detail} ${msg}`;
+      if (/angle/i.test(both)) throw new Error("hair_angle");
+      if (/lighting|dark|bright|exposure/i.test(both))
+        throw new Error("low_quality");
+      if (/unsupported.*image|image.*type|invalid.*image/i.test(both))
+        throw new Error("invalid_image");
+      if (/face|subject/i.test(both)) throw new Error("no_subject");
+      throw new Error(`perfectcorp_task_${detail}`);
+    }
+    await sleep(2000);
+  }
+  throw new Error("perfectcorp_timeout");
+}
+
+/**
+ * Map a hair-density poll payload into our issues. Confirmed shape (live):
+ *   data.results.hair_density = { mapping: "2.47", term: "Medium Density" }
+ * `mapping` is a 1–4 density value (4 = fullest); `term` is the grade label.
+ */
+export function parseHairDensity(raw: unknown): Issue[] {
+  const data = isRecord(raw) && isRecord(raw.data) ? raw.data : null;
+  const results = data && isRecord(data.results) ? data.results : null;
+  const hd = results && isRecord(results.hair_density) ? results.hair_density : null;
+
+  const mapping =
+    hd && (typeof hd.mapping === "string" || typeof hd.mapping === "number")
+      ? Number(hd.mapping)
+      : null;
+  const term = hd && typeof hd.term === "string" ? hd.term : null;
+
+  return [
+    {
+      issueType: "hair_density",
+      // Normalize the 1–4 mapping to 0–1 (higher = fuller).
+      score:
+        mapping != null && Number.isFinite(mapping)
+          ? Math.min(1, Math.max(0, mapping / 4))
+          : null,
+      confidence: null,
+      details: { type: term ?? (mapping != null ? String(mapping) : undefined) },
+    },
+  ];
+}
+
 export async function analyzeWithPerfectCorp(
   kind: AnalysisKind,
   jpeg: Buffer,
+  cameraKit = false,
 ): Promise<AnalysisResult> {
   if (kind === "face") {
     const fileId = await uploadFile(SKIN_FILE_PATH, jpeg);
-    const taskId = await startSkinTask(fileId);
+    const taskId = await startSkinTask(fileId, cameraKit);
     const raw = await pollSkinTask(taskId);
     const issues = parseSkin(raw);
     // Persist the raw JSON without the (expiring) face-image URLs.
     return { requestId: taskId, raw: sanitizeRaw(raw), issues };
   }
-  // Hair contract not wired yet (4 separate features).
-  throw new Error("perfectcorp_hair_pending");
+
+  // Hair = density (front selfie, head lowered ~45°). Kit images need
+  // pf_camera_kit:true so the engine trusts the Kit's framing.
+  const fileId = await uploadFile(HAIR_DENSITY_FILE_PATH, jpeg);
+  const taskId = await startTask(HAIR_DENSITY_TASK_PATH, {
+    src_file_id: fileId,
+    pf_camera_kit: cameraKit,
+  });
+  const raw = await pollTask(HAIR_DENSITY_TASK_PATH, taskId);
+  return { requestId: taskId, raw: sanitizeRaw(raw), issues: parseHairDensity(raw) };
 }
