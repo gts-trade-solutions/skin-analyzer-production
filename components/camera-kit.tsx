@@ -116,6 +116,18 @@ export function CameraKit({
   const proceedRef = useRef(proceed);
   proceedRef.current = proceed;
 
+  // Exit the Kit. Suppress the SDK's own close event (so it isn't read as a
+  // second cancel) and hand back to the parent.
+  const cancel = () => {
+    proceedingRef.current = true;
+    try {
+      window.YMK?.close?.();
+    } catch {
+      // ignore
+    }
+    onCancelRef.current();
+  };
+
   const retake = () => {
     proceedingRef.current = false;
     fileRef.current = null;
@@ -223,19 +235,64 @@ export function CameraKit({
     };
   }, []);
 
+  // The guided camera takes over the full screen during loading/capture so the
+  // SDK's mobile chrome (status chips, controls) lays out edge-to-edge instead
+  // of overflowing the narrow app column. Hidden in review/error so the
+  // container persists (retake reopens in place) without covering that UI.
+  const fullscreen = (phase === "loading" || phase === "camera") && !error;
+
   return (
     <div className="space-y-3">
       {/* Persistent SDK container — kept in the DOM so retake reopens in place. */}
       <div
         id="YMK-module"
-        className={phase === "review" ? "hidden" : "w-full overflow-hidden rounded-xl"}
+        className={
+          fullscreen
+            ? "fixed inset-0 z-50 bg-black"
+            : "hidden"
+        }
       />
+
+      {/* Overlays for the full-screen camera: a spinner while loading and an
+          always-available close button. */}
+      {fullscreen && (
+        <>
+          {phase === "loading" && (
+            <div className="fixed inset-0 z-[55] grid place-items-center bg-black text-white">
+              <p className="flex items-center gap-2 text-sm">
+                <span className="inline-block h-5 w-5 animate-spin rounded-full border-2 border-white/40 border-t-white" />
+                Loading camera…
+              </p>
+            </div>
+          )}
+          <button
+            onClick={cancel}
+            aria-label="Close camera"
+            className="fixed top-4 right-4 z-[60] grid h-10 w-10 place-items-center rounded-full bg-black/55 text-white backdrop-blur-sm"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              className="h-5 w-5"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              strokeLinecap="round"
+            >
+              <path d="M6 6l12 12M18 6L6 18" />
+            </svg>
+          </button>
+        </>
+      )}
 
       {phase === "review" && preview ? (
         <>
-          <div className="relative overflow-hidden rounded-xl">
+          <div className="relative mx-auto aspect-[3/4] w-full max-w-[22rem] overflow-hidden rounded-xl">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img src={preview} alt="Captured" className="w-full" />
+            <img
+              src={preview}
+              alt="Captured"
+              className="h-full w-full object-cover"
+            />
             {/* Depleting timer bar across the top. */}
             <div className="absolute inset-x-0 top-0 h-1.5 bg-black/25">
               <div
@@ -264,13 +321,9 @@ export function CameraKit({
         </>
       ) : (
         <>
-          {error ? (
+          {error && (
             <p className="text-destructive text-center text-sm">{error}</p>
-          ) : phase === "loading" ? (
-            <p className="text-muted-foreground text-center text-sm">
-              Loading camera…
-            </p>
-          ) : null}
+          )}
           <Button variant="outline" className="w-full" onClick={() => onCancel()}>
             {error ? "Back" : "Cancel"}
           </Button>
