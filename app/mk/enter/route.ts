@@ -52,7 +52,15 @@ export async function GET(req: NextRequest) {
     jti: claims.jti,
   });
 
-  const res = NextResponse.redirect(new URL("/mk/analyze", req.url));
+  // Relative redirect: the browser resolves "/mk/analyze" against the PUBLIC
+  // URL in its address bar, so it works no matter what host nginx forwards as
+  // req.url (which is the internal http://localhost:<port> behind the proxy).
+  // Using NextResponse.redirect(new URL(..., req.url)) would embed that internal
+  // host and bounce the user to a localhost they can't reach.
+  const res = new NextResponse(null, {
+    status: 307,
+    headers: { Location: "/mk/analyze" },
+  });
   res.cookies.set(MK_SESSION_COOKIE, cookieValue, {
     httpOnly: true,
     secure: true,
