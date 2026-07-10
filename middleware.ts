@@ -18,6 +18,14 @@ export default auth((req) => {
 
   // Auth.js endpoints + our signup/verify routes are public.
   if (pathname.startsWith("/api/auth")) return;
+
+  // MadeNKorea integration surface — additive, self-authenticating via the
+  // signed handoff token + scoped mk_session. Must bypass the standalone
+  // /signin gate. The routes 404 when INTEGRATION_ENABLED is off, so leaving
+  // this unconditional is safe and never affects standalone visitors.
+  if (pathname === "/mk" || pathname.startsWith("/mk/")) return;
+  if (pathname.startsWith("/api/mk")) return;
+
   if (PUBLIC.some((p) => pathname === p || pathname.startsWith(p + "/"))) return;
 
   const session = req.auth;
