@@ -13,7 +13,7 @@ const seen = new Map<string, number>(); // jti -> expiry (epoch ms)
  * Record a jti as used. Returns true if this is the first use, false if it was
  * already used within its TTL. TTL should cover the handoff token's lifetime.
  */
-export function useJtiOnce(jti: string, ttlSec = 600): boolean {
+export function claimJtiOnce(jti: string, ttlSec = 600): boolean {
   const now = Date.now();
 
   // Opportunistic prune so the map can't grow unbounded.

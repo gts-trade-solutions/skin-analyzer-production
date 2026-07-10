@@ -9,7 +9,7 @@ import {
   MK_SESSION_COOKIE,
   MK_SESSION_TTL_SEC,
 } from "@/lib/mk/session";
-import { useJtiOnce } from "@/lib/mk/replay";
+import { claimJtiOnce } from "@/lib/mk/replay";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -41,7 +41,7 @@ export async function GET(req: NextRequest) {
 
   // Single-use: reject a replayed token (defense-in-depth; MadeNKorea's grant
   // consumption is the authoritative guard).
-  if (!useJtiOnce(claims.jti)) return bounce("token_used");
+  if (!claimJtiOnce(claims.jti)) return bounce("token_used");
 
   const cookieValue = createMkSession({
     mkUserId: claims.sub,
