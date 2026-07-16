@@ -20,19 +20,31 @@ export default async function MkAnalyzePage() {
   if (!integrationEnabled()) redirect("/");
 
   const jar = await cookies();
-  const session = readMkSession(jar.get(MK_SESSION_COOKIE)?.value);
+  const cookieValue = jar.get(MK_SESSION_COOKIE)?.value;
+  const session = readMkSession(cookieValue);
   if (!session) {
     redirect(
       MADENKOREA_URL ? `${MADENKOREA_URL}/skin-analyzer?error=session_expired` : "/",
     );
   }
 
+  // Absolute URL for the desktop→phone QR. Uses the analyzer's public base
+  // (AUTH_URL), never req.url (which is the internal host behind nginx).
+  const base = (process.env.AUTH_URL || process.env.NEXTAUTH_URL || "").replace(
+    /\/+$/,
+    "",
+  );
+  const continueUrl =
+    base && cookieValue
+      ? `${base}/mk/go?s=${encodeURIComponent(cookieValue)}`
+      : null;
+
   return (
     <main className="flex min-h-dvh flex-col items-center justify-center gap-6 p-6">
       <p className="text-xs font-medium uppercase tracking-[0.3em] text-muted-foreground">
         MadeNKorea × Skin Analyzer
       </p>
-      <MkCapture name={session!.name} />
+      <MkCapture name={session!.name} continueUrl={continueUrl} />
     </main>
   );
 }

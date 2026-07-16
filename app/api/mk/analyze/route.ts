@@ -18,6 +18,7 @@ import {
   presignGetUrl,
 } from "@/lib/s3";
 import { integrationEnabled, MADENKOREA_URL, signCallback } from "@/lib/mk/crypto";
+import { buildImageProxyUrl } from "@/lib/mk/imageProxy";
 import { MK_SESSION_COOKIE, readMkSession } from "@/lib/mk/session";
 
 export const runtime = "nodejs";
@@ -222,13 +223,27 @@ function buildCallbackPayload(
   const skinType = real.find((i) => i.issueType === "skin_type")?.details?.type ?? null;
   const skinAge = real.find((i) => i.issueType === "skin_age")?.details?.type ?? null;
 
+  // Durable proxy URLs for the analyzed photo + concern overlays, pointing at
+  // this analyzer's /mk/image (re-presigns on each load). Uses the analyzer's
+  // own public base URL.
+  const proxyBase = (
+    process.env.AUTH_URL ||
+    process.env.NEXTAUTH_URL ||
+    ""
+  ).replace(/\/+$/, "");
+  const proxy = (key?: string): string | null =>
+    key && proxyBase ? buildImageProxyUrl(proxyBase, key) : null;
+
+  // `resize_image` is the analyzed base photo, not a concern.
+  const META = ["overall", "skin_type", "skin_age", "resize_image"];
+  const baseImage = proxy(
+    real.find((i) => i.issueType === "resize_image")?.details?.imageKey,
+  );
+  const concerns = real.filter((i) => !META.includes(i.issueType));
+
   // Worst (lowest health score) scored concerns become the headline.
-  const topConcerns = real
-    .filter(
-      (i) =>
-        typeof i.score === "number" &&
-        !["overall", "skin_type", "skin_age"].includes(i.issueType),
-    )
+  const topConcerns = concerns
+    .filter((i) => typeof i.score === "number")
     .sort((a, b) => (a.score ?? 1) - (b.score ?? 1))
     .slice(0, 3)
     .map((i) => i.issueType);
@@ -238,13 +253,19 @@ function buildCallbackPayload(
     grant_id: session.grantId,
     mk_user_id: session.mkUserId,
     kind,
-    summary: { overall, skin_type: skinType, skin_age: skinAge, top_concerns: topConcerns },
-    issues: real.map((i) => ({
+    summary: {
+      overall,
+      skin_type: skinType,
+      skin_age: skinAge,
+      top_concerns: topConcerns,
+      base_image: baseImage,
+    },
+    issues: concerns.map((i) => ({
       issue_type: i.issueType,
       score: i.score ?? null,
       confidence: i.confidence ?? null,
       severity_band: bandFromScore(i.score),
-      details: i.details ?? null,
+      details: { ...(i.details ?? {}), imageUrl: proxy(i.details?.imageKey) },
     })),
   };
 }
